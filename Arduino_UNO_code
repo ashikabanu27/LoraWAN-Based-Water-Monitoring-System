@@ -1,0 +1,132 @@
+#if CONFIG_FREERTOS_UNICORE
+#define ARDUINO_RUNNING_CORE 0
+#else
+#define ARDUINO_RUNNING_CORE 1
+#endif
+
+#include "AT_Command.h"
+#include "BatterRead.h"
+
+// Define the function code and pins
+#define fun_Code    8     // Function code for uplink
+#define LED_PIN     2    // LED pin
+#define trigPin  5
+#define echoPin  18
+#define SOUND_SPEED 0.034
+#define CM_TO_INCH 0.393701
+
+
+bool Sensor_Flag = 0;
+uint16_t SenData = 0;
+unsigned char TXBuffer[] = {0, 0, fun_Code, 0, 0};
+extern bool AT_Flag;  // AT TX Flag...
+long duration;
+float distanceCm;
+float distanceInch;
+
+void TaskUplink(void *pvParameters);
+void TaskSensor(void *pvParameters);
+void TaskDow(void *pvParameters);
+
+void setup() {
+  Serial.begin(115200);
+  UARTsetup();
+
+  // Set up LED and LDR pins
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(trigPin, OUTPUT); // Sets the trigPin as an Output
+  pinMode(echoPin, INPUT); // Sets the echoPin as an Input
+
+  // Create FreeRTOS tasks
+  xTaskCreatePinnedToCore(TaskUplink, "TaskUplink", 10240, NULL, 4, NULL, ARDUINO_RUNNING_CORE);
+  xTaskCreatePinnedToCore(TaskSensor, "TaskSensing", 10240, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
+  xTaskCreatePinnedToCore(TaskDow, "TaskDow", 10240, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
+}
+
+void loop() {
+  // FreeRTOS tasks manage the loop
+}
+
+void TaskUplink(void *pvParameters)  // Task to handle uplink communication
+{
+  (void) pvParameters;
+  for (;;) {
+    if ((AT_Flag != 1 && joinFlag == 1) || (Sensor_Flag == 1 && joinFlag == 1)) {
+      if (Class_A == 1) {
+        BatteryRead(); // Read battery voltage from ESP32
+        TXBuffer[0] = BatRed >> 8;
+        TXBuffer[1] = BatRed;
+      }
+      if (Sensor_Flag != 1) {
+        TXBuffer[3] = SenData >> 8;
+        TXBuffer[4] = SenData;
+      }
+
+      /* Transmit Function from ESP32 to LoRa-IC */
+      UserTXFun(TXBuffer, sizeof(TXBuffer));
+      for (int i = 0; i < 1000; i++) {
+        ;
+      }
+      memset(TXBuffer, 0, sizeof(TXBuffer));
+      TXBuffer[2] = fun_Code;
+    }
+    vTaskDelay(20000);  // Delay for 20 seconds
+  }
+}
+
+void TaskSensor(void *pvParameters)  // Task to handle sensor logic for LDR and LED
+{
+  (void) pvParameters;
+  for (;;) {
+    digitalWrite(trigPin, LOW);
+  delayMicroseconds(5);
+  // Sets the trigPin on HIGH state for 10 micro seconds
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  
+  // Reads the echoPin, returns the sound wave travel time in microseconds
+  duration = pulseIn(echoPin, HIGH);
+  
+  // Calculate the distance
+  distanceCm = duration * SOUND_SPEED/2;
+  
+  // Convert to inches
+  distanceInch = distanceCm * CM_TO_INCH;
+  
+  // Prints the distance in the Serial Monitor
+  Serial.print("Distance (cm): ");
+  Serial.println(distanceCm);
+  Serial.print("Distance (inch): ");
+  Serial.println(distanceInch);
+  delay(400);
+  if (distanceCm<100)
+  {
+    digitalWrite(LED_PIN,HIGH);
+  }
+  else
+  {
+    digitalWrite(LED_PIN,LOW);
+  }
+  
+  
+
+    vTaskDelay(2000);  // Delay for 2 seconds before next reading
+  }
+}
+
+/* Get User Downlink Value from LoRa-IC */
+void TaskDow(void *pvParameters)  // Task to handle downlink communication
+{
+  (void) pvParameters;
+  uint8_t r = 0;
+  for (;;) {
+    if (usDwStFlag == 1 && joinFlag == 1) {
+      r = usDwData[0];
+      memset(usDwData, 0, sizeof(usDwData));
+      usDwStFlag = 0;
+      r = 0;
+    }
+    vTaskDelay(10);  // Delay for 150 ms
+  }
+}
